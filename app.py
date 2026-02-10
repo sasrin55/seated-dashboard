@@ -16,7 +16,8 @@ st.markdown(
       .card { border: 1px solid rgba(49,51,63,0.12); border-radius: 16px; padding: 16px 16px; background: white; }
       .title { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.2rem; }
       .section { margin-top: 1.2rem; }
-      .pill { display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(49,51,63,0.14); background: rgba(49,51,63,0.03); font-size: 0.85rem; }
+      .pill { display:inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(49,51,63,0.14); background: rgba(49,51,63,0.03); font-size: 0.85rem; margin-right: 6px; }
+      .tight { margin-top: 0.35rem; }
     </style>
     """,
     unsafe_allow_html=True
@@ -51,6 +52,7 @@ if not oct_years:
 
 target_year = oct_years[-1]
 oct_df = df[(df["Year"] == target_year) & (df["Month"] == 10)].copy()
+
 if oct_df.empty:
     st.error("October dataset is empty after cleaning.")
     st.stop()
@@ -59,24 +61,52 @@ if oct_df.empty:
 oct_df["DayOfWeek"] = oct_df["Date"].dt.day_name()
 dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-with st.sidebar:
-    st.markdown("### October Filters")
-    st.caption(f"Showing October {target_year}")
-
-    if "Branch" in oct_df.columns:
-        branches = ["All"] + sorted([b for b in oct_df["Branch"].dropna().unique().tolist()])
-        branch_choice = st.selectbox("Branch", branches, index=0)
-        if branch_choice != "All":
-            oct_df = oct_df[oct_df["Branch"] == branch_choice]
-
-    st.markdown("---")
-    AVG_TICKET = st.number_input("Avg ticket (PKR)", min_value=0, value=20000, step=500)
-    CAPACITY = st.number_input("Covers capacity per time-slot", min_value=1, value=100, step=10)
+# Optional Branch filter, only if column exists
+branch_choice = "All"
+if "Branch" in oct_df.columns:
+    branches = ["All"] + sorted([b for b in oct_df["Branch"].dropna().unique().tolist()])
+    branch_choice = st.selectbox("Branch", branches, index=0)
+    if branch_choice != "All":
+        oct_df = oct_df[oct_df["Branch"] == branch_choice]
 
 if oct_df.empty:
     st.title("Paola's October Reservation Report")
     st.write("No data for this selection.")
     st.stop()
+
+# Header
+st.markdown('<div class="title">Paola\'s October Reservation Report</div>', unsafe_allow_html=True)
+
+# Report pills
+total_covers_preview = int(oct_df["Pax"].sum())
+total_bookings_preview = int(len(oct_df))
+
+st.markdown(
+    f'<span class="pill">October {target_year}</span>'
+    f'<span class="pill">Covers: {total_covers_preview:,}</span>'
+    f'<span class="pill">Bookings: {total_bookings_preview:,}</span>'
+    + (f'<span class="pill">Branch: {branch_choice}</span>' if branch_choice != "All" else ""),
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtle tight">A simple monthly view of demand, pressure windows, and missed revenue from empty tables.</div>',
+    unsafe_allow_html=True
+)
+
+# Assumptions (not a sidebar, and not always visible)
+with st.expander("Assumptions used in this report", expanded=False):
+    c1, c2 = st.columns(2)
+    with c1:
+        AVG_TICKET = st.number_input("Avg ticket (PKR)", min_value=0, value=20000, step=500)
+    with c2:
+        CAPACITY = st.number_input("Covers capacity per time-slot", min_value=1, value=100, step=10)
+
+# Defaults if expander not touched
+if "AVG_TICKET" not in locals():
+    AVG_TICKET = 20000
+if "CAPACITY" not in locals():
+    CAPACITY = 100
 
 # Money layer
 oct_df["Revenue"] = oct_df["Pax"] * float(AVG_TICKET)
@@ -102,28 +132,21 @@ res_covers = get_value_or_zero(covers_by_source, "Source", "Reservation", "Cover
 walkin_booking_pct = (walkin_bookings / total_bookings * 100) if total_bookings else 0
 walkin_cover_pct = (walkin_covers / total_covers * 100) if total_covers else 0
 
-# Peak time overall
+# Peaks
 time_covers = oct_df.groupby("Time_Clean")["Pax"].sum().reset_index().sort_values("Pax", ascending=False)
 peak_time = str(time_covers.iloc[0]["Time_Clean"])
 peak_time_covers = int(time_covers.iloc[0]["Pax"])
 
-# Peak day overall
-dow_covers_full = oct_df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).reset_index()
-dow_covers_full = dow_covers_full.dropna()
+dow_covers_full = oct_df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).reset_index().dropna()
 dow_sorted = dow_covers_full.sort_values("Pax", ascending=False)
 peak_dow = str(dow_sorted.iloc[0]["DayOfWeek"])
 peak_dow_covers = int(dow_sorted.iloc[0]["Pax"])
 
-# Peak day x time
 heat = oct_df.groupby(["DayOfWeek", "Time_Clean"])["Pax"].sum().reset_index()
 heat_sorted = heat.sort_values("Pax", ascending=False)
 peak_dow_time = str(heat_sorted.iloc[0]["DayOfWeek"])
 peak_time_slot = str(heat_sorted.iloc[0]["Time_Clean"])
 peak_dow_time_covers = int(heat_sorted.iloc[0]["Pax"])
-
-# Reservation avg party
-res_only = oct_df[oct_df["Source"] == "Reservation"]
-avg_res_party = float(res_only["Pax"].mean()) if not res_only.empty else 0.0
 
 # Utilization + Lost revenue
 slot_util = oct_df.groupby(["Date", "Time_Clean"])["Pax"].sum().reset_index()
@@ -132,16 +155,6 @@ slot_util["Utilization"] = (slot_util["Pax"] / slot_util["Capacity"]).clip(0, 1)
 slot_util["LostCovers"] = (slot_util["Capacity"] - slot_util["Pax"]).clip(lower=0)
 slot_util["LostRevenue"] = slot_util["LostCovers"] * float(AVG_TICKET)
 lost_rev = int(slot_util["LostRevenue"].sum())
-
-# Header
-st.markdown('<div class="title">Paola\'s October Reservation Report</div>', unsafe_allow_html=True)
-st.markdown(
-    f'<span class="pill">October {target_year}</span> '
-    f'<span class="pill">Covers: {total_covers:,}</span> '
-    f'<span class="pill">Bookings: {total_bookings:,}</span>',
-    unsafe_allow_html=True
-)
-st.markdown('<div class="subtle">A simple monthly view of demand, pressure windows, and missed revenue from empty tables.</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="section"></div>', unsafe_allow_html=True)
 
@@ -158,58 +171,52 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="section"></div>', unsafe_allow_html=True)
 
-# October calendar chart: bookings and covers by day
+# October Calendar View
 st.subheader("October Calendar View")
 
-# Build daily metrics
 daily = oct_df.copy()
 daily["DateOnly"] = daily["Date"].dt.date
-daily_bookings = daily.groupby("DateOnly").size().reset_index(name="Bookings")
-daily_covers = daily.groupby("DateOnly")["Pax"].sum().reset_index(name="Covers")
-daily_metrics = daily_bookings.merge(daily_covers, on="DateOnly", how="outer").fillna(0)
+
+daily_metrics = (
+    daily.groupby("DateOnly")
+    .agg(Bookings=("DateOnly", "size"), Covers=("Pax", "sum"))
+    .reset_index()
+)
 
 first_day = pd.Timestamp(target_year, 10, 1)
 last_day = pd.Timestamp(target_year, 10, calendar.monthrange(target_year, 10)[1])
-
 all_days = pd.date_range(first_day, last_day, freq="D")
+
 cal_df = pd.DataFrame({"Date": all_days})
 cal_df["DateOnly"] = cal_df["Date"].dt.date
 cal_df = cal_df.merge(daily_metrics, on="DateOnly", how="left").fillna({"Bookings": 0, "Covers": 0})
 
-# Monday based calendar columns
 cal_df["Weekday"] = cal_df["Date"].dt.weekday
 weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-# week index (rows)
 first_weekday = first_day.weekday()
 cal_df["DayIndex"] = (cal_df["Date"] - first_day).dt.days
 cal_df["WeekRow"] = ((cal_df["DayIndex"] + first_weekday) // 7).astype(int)
 
-# pivot for heatmap
 def calendar_heatmap(value_col: str, title: str):
     pivot = cal_df.pivot(index="WeekRow", columns="Weekday", values=value_col)
     date_pivot = cal_df.pivot(index="WeekRow", columns="Weekday", values="DateOnly")
 
     text = date_pivot.copy()
+    hover = date_pivot.copy()
+
     for r in text.index:
         for c in text.columns:
             d = text.loc[r, c]
             if pd.isna(d):
                 text.loc[r, c] = ""
-            else:
-                day_num = pd.Timestamp(d).day
-                val = int(pivot.loc[r, c]) if not pd.isna(pivot.loc[r, c]) else 0
-                text.loc[r, c] = f"{day_num}\n{val}"
-
-    hover = date_pivot.copy()
-    for r in hover.index:
-        for c in hover.columns:
-            d = hover.loc[r, c]
-            if pd.isna(d):
                 hover.loc[r, c] = ""
             else:
+                day_num = pd.Timestamp(d).day
                 b = int(cal_df.loc[cal_df["DateOnly"] == d, "Bookings"].iloc[0])
                 cv = int(cal_df.loc[cal_df["DateOnly"] == d, "Covers"].iloc[0])
+                val = int(pivot.loc[r, c]) if not pd.isna(pivot.loc[r, c]) else 0
+                text.loc[r, c] = f"{day_num}\n{val}"
                 hover.loc[r, c] = f"{d}<br>Bookings: {b:,}<br>Covers: {cv:,}"
 
     fig = go.Figure(
@@ -234,48 +241,7 @@ def calendar_heatmap(value_col: str, title: str):
     return fig
 
 tab1, tab2 = st.tabs(["Bookings per day", "Covers per day"])
-
 with tab1:
     st.plotly_chart(calendar_heatmap("Bookings", "Bookings by Day (October)"), use_container_width=True)
-
 with tab2:
     st.plotly_chart(calendar_heatmap("Covers", "Covers by Day (October)"), use_container_width=True)
-
-st.markdown('<div class="section"></div>', unsafe_allow_html=True)
-
-# Existing sections you already had (you can keep building below)
-st.subheader("Reservations vs Walk-in")
-
-mix_table = pd.DataFrame(
-    [
-        ["Reservation", int(res_bookings), int(res_covers)],
-        ["Walk-in", int(walkin_bookings), int(walkin_covers)],
-    ],
-    columns=["Source", "Bookings", "Covers"]
-)
-mix_table["Bookings share"] = (mix_table["Bookings"] / mix_table["Bookings"].sum() * 100).round(1).astype(str) + "%"
-mix_table["Covers share"] = (mix_table["Covers"] / mix_table["Covers"].sum() * 100).round(1).astype(str) + "%"
-
-st.table(mix_table)
-
-chart_mode = st.radio("Show", ["Bookings", "Covers"], horizontal=True)
-if chart_mode == "Bookings":
-    fig_mix = px.bar(
-        bookings_by_source.sort_values("Bookings", ascending=False),
-        x="Source",
-        y="Bookings",
-        text="Bookings",
-        labels={"Source": "Source", "Bookings": "Bookings"}
-    )
-    fig_mix.update_traces(textposition="outside", cliponaxis=False)
-else:
-    fig_mix = px.bar(
-        covers_by_source.sort_values("Covers", ascending=False),
-        x="Source",
-        y="Covers",
-        text="Covers",
-        labels={"Source": "Source", "Covers": "Covers"}
-    )
-    fig_mix.update_traces(textposition="outside", cliponaxis=False)
-
-st.plotly_chart(fig_mix, use_container_width=True)
