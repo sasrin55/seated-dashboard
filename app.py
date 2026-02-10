@@ -2,175 +2,154 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# -----------------------------
-# Page Config
-# -----------------------------
-st.set_page_config(
-    page_title="Seated Analytics",
-    layout="wide"
-)
+st.set_page_config(page_title="Seated Analytics", layout="wide")
 
-# -----------------------------
-# Load Data
-# -----------------------------
 @st.cache_data
 def load_data():
     return pd.read_csv("master.csv")
 
 df = load_data()
 
-# -----------------------------
-# Clean Columns
-# -----------------------------
-
-# Convert Pax to number
+# Clean types
 df["Pax"] = pd.to_numeric(df["Pax"], errors="coerce")
 
-# Change this if your time column name is different
-TIME_COL = "Time Updated"
+# Date
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-df["Time_Clean"] = pd.to_datetime(
-    df[TIME_COL],
-    errors="coerce"
-).dt.strftime("%H:%M")
+# Time (use your cleaned column)
+TIME_COL = "Time Updated"  # change if your CSV uses a different column name
+df["Time_Clean"] = pd.to_datetime(df[TIME_COL], errors="coerce").dt.strftime("%H:%M")
 
 # Remove bad rows
-df = df.dropna(subset=["Pax", "Time_Clean", "Source", "Date"])
+df = df.dropna(subset=["Pax", "Date", "Time_Clean", "Source"])
 
-# -----------------------------
-# Sidebar Filters
-# -----------------------------
+# Day of week
+df["DayOfWeek"] = df["Date"].dt.day_name()
+
+# Sidebar: date range with full default
 st.sidebar.title("Filters")
 
-dates = sorted(df["Date"].unique())
+min_date = df["Date"].min().date()
+max_date = df["Date"].max().date()
 
-selected_dates = st.sidebar.multiselect(
-    "Select Dates",
-    dates,
-    default=dates
+date_range = st.sidebar.date_input(
+    "Date range",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date
 )
 
-df = df[df["Date"].isin(selected_dates)]
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_date, end_date = date_range
+else:
+    start_date, end_date = min_date, max_date
 
-# -----------------------------
-# Header
-# -----------------------------
-st.title("📊 Seated – Restaurant Performance Dashboard")
+df = df[(df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)]
 
-st.markdown("Real-time insights from reservation and walk-in data")
+st.title("Seated Restaurant Performance Dashboard")
+st.caption("Insights from reservation and walk-in data")
 
-# -----------------------------
-# KPI Row
-# -----------------------------
+# KPI row
 total_covers = int(df["Pax"].sum())
-total_bookings = len(df)
+total_bookings = int(df.shape[0])
 avg_party = round(df["Pax"].mean(), 2)
-walkin_share = round(
-    (df[df["Source"]=="Walk-in"].shape[0] / len(df)) * 100,
-    1
-)
 
-c1, c2, c3, c4 = st.columns(4)
+k1, k2, k3 = st.columns(3)
+k1.metric("Total covers", total_covers)
+k2.metric("Total bookings", total_bookings)
+k3.metric("Average party size", avg_party)
 
-c1.metric("Total Covers", total_covers)
-c2.metric("Total Bookings", total_bookings)
-c3.metric("Avg Party Size", avg_party)
-c4.metric("Walk-in %", f"{walkin_share}%")
+st.divider()
 
-# -----------------------------
-# Walk-in vs Reservation
-# -----------------------------
-st.subheader("Walk-in vs Reservation Mix")
+# 1) Busiest time overall (by covers)
+st.subheader("Busiest time overall")
 
-source_df = df.groupby("Source").size().reset_index(name="Bookings")
+time_covers = df.groupby("Time_Clean")["Pax"].sum().reset_index().sort_values("Pax", ascending=False)
+busiest_time = time_covers.iloc[0]["Time_Clean"]
+busiest_time_covers = int(time_covers.iloc[0]["Pax"])
 
-fig1 = px.pie(
-    source_df,
-    names="Source",
-    values="Bookings",
-    hole=0.45
-)
+st.write(f"Peak time: {busiest_time} with {busiest_time_covers} total covers in the selected range.")
 
-st.plotly_chart(fig1, use_container_width=True)
-
-# -----------------------------
-# Busiest Times
-# -----------------------------
-st.subheader("Busiest Times (Total Covers)")
-
-busy = df.groupby("Time_Clean")["Pax"].sum().reset_index()
-
-fig2 = px.bar(
-    busy,
+fig_time = px.bar(
+    time_covers.sort_values("Time_Clean"),
     x="Time_Clean",
     y="Pax",
-    labels={"Pax":"Total Covers","Time_Clean":"Time"},
+    labels={"Time_Clean": "Time", "Pax": "Total covers"}
 )
+st.plotly_chart(fig_time, use_container_width=True)
 
-st.plotly_chart(fig2, use_container_width=True)
+st.divider()
 
-# -----------------------------
-# Walk-in vs Reservation by Time
-# -----------------------------
-st.subheader("Demand by Time & Source")
+# 2) Busiest day of week overall (by covers)
+st.subheader("Busiest day of week overall")
 
-time_source = (
-    df.groupby(["Time_Clean","Source"])
-      .size()
-      .reset_index(name="Count")
-)
+dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+dow_covers = df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).reset_index()
+dow_covers = dow_covers.dropna()
 
-fig3 = px.bar(
-    time_source,
-    x="Time_Clean",
-    y="Count",
-    color="Source",
-    barmode="group"
-)
+busiest_dow_row = dow_covers.sort_values("Pax", ascending=False).iloc[0]
+busiest_dow = busiest_dow_row["DayOfWeek"]
+busiest_dow_covers = int(busiest_dow_row["Pax"])
 
-st.plotly_chart(fig3, use_container_width=True)
+st.write(f"Peak day: {busiest_dow} with {busiest_dow_covers} total covers in the selected range.")
 
-# -----------------------------
-# Avg Reservation Table Size
-# -----------------------------
-st.subheader("Average Table Size (Advance Reservations)")
-
-res_df = df[df["Source"]=="Reservation"]
-
-avg_res = (
-    res_df.groupby("Time_Clean")["Pax"]
-          .mean()
-          .reset_index()
-)
-
-fig4 = px.line(
-    avg_res,
-    x="Time_Clean",
+fig_dow = px.bar(
+    dow_covers,
+    x="DayOfWeek",
     y="Pax",
-    markers=True,
-    labels={"Pax":"Avg Guests","Time_Clean":"Time"}
+    labels={"DayOfWeek": "Day of week", "Pax": "Total covers"},
+    category_orders={"DayOfWeek": dow_order}
 )
+st.plotly_chart(fig_dow, use_container_width=True)
 
-st.plotly_chart(fig4, use_container_width=True)
+st.divider()
 
-# -----------------------------
-# Daily Covers Trend
-# -----------------------------
-st.subheader("Daily Covers Trend")
+# 3) Busiest day x time (heatmap by covers)
+st.subheader("Busiest day and time")
 
-daily = df.groupby("Date")["Pax"].sum().reset_index()
+heat = df.groupby(["DayOfWeek", "Time_Clean"])["Pax"].sum().reset_index()
 
-fig5 = px.line(
-    daily,
-    x="Date",
-    y="Pax",
-    markers=True
+fig_heat = px.density_heatmap(
+    heat,
+    x="Time_Clean",
+    y="DayOfWeek",
+    z="Pax",
+    category_orders={"DayOfWeek": dow_order},
+    labels={"Time_Clean": "Time", "DayOfWeek": "Day of week", "Pax": "Total covers"}
 )
+st.plotly_chart(fig_heat, use_container_width=True)
 
-st.plotly_chart(fig5, use_container_width=True)
+st.divider()
 
-# -----------------------------
-# Raw Data
-# -----------------------------
-with st.expander("View Raw Data"):
-    st.dataframe(df, use_container_width=True)
+# 4) Reservations vs walk-in
+st.subheader("Reservations vs walk-in")
+
+col_a, col_b = st.columns(2)
+
+bookings_by_source = df.groupby("Source").size().reset_index(name="Bookings").sort_values("Bookings", ascending=False)
+covers_by_source = df.groupby("Source")["Pax"].sum().reset_index(name="Covers").sort_values("Covers", ascending=False)
+
+with col_a:
+    st.write("Bookings (count of entries)")
+    fig_bookings = px.bar(
+        bookings_by_source,
+        x="Source",
+        y="Bookings",
+        labels={"Source": "Source", "Bookings": "Bookings"}
+    )
+    st.plotly_chart(fig_bookings, use_container_width=True)
+
+with col_b:
+    st.write("Covers (sum of Pax)")
+    fig_covers = px.bar(
+        covers_by_source,
+        x="Source",
+        y="Covers",
+        labels={"Source": "Source", "Covers": "Covers"}
+    )
+    st.plotly_chart(fig_covers, use_container_width=True)
+
+with st.expander("View filtered data"):
+    out = df.copy()
+    out["Date"] = out["Date"].dt.date
+    st.dataframe(out, use_container_width=True)
