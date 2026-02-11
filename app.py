@@ -243,8 +243,8 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
 
     pivot = agg.pivot(index="Time_Label", columns="DayOfWeek", values="Value").reindex(columns=dow_order).fillna(0)
 
-    # Focus on top 14 time slots for readability
-    top_times = agg.groupby("Time_Label")["Value"].sum().sort_values(ascending=False).head(14).index
+    # Focus on top 10 time slots for better readability
+    top_times = agg.groupby("Time_Label")["Value"].sum().sort_values(ascending=False).head(10).index
     pivot = pivot.loc[pivot.index.isin(top_times)]
 
     # Sort time labels
@@ -259,9 +259,9 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
 
     pivot = pivot.reindex(sorted(pivot.index, key=time_sort_key))
 
-    # Clean text values
+    # Clean text values - only show if > 50 to reduce clutter
     z_values = pivot.values
-    text_values = [[f'{int(val)}' if val > 0 else '' for val in row] for row in z_values]
+    text_values = [[f'{int(val)}' if val > 50 else '' for val in row] for row in z_values]
 
     fig = go.Figure(
         data=go.Heatmap(
@@ -273,17 +273,17 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
             showscale=False,
             text=text_values,
             texttemplate='%{text}',
-            textfont=dict(size=10, family='Inter', color='#1a1d29'),
-            hovertemplate="%{y}<br>%{x}<br>Value: %{z}<extra></extra>",
+            textfont=dict(size=11, family='Inter', color='#1a1d29', weight=600),
+            hovertemplate="%{y}<br>%{x}<br>" + metric + ": %{z}<extra></extra>",
         )
     )
 
     fig.update_layout(
-        height=320,
-        margin=dict(l=70, r=10, t=10, b=40),
+        height=380,
+        margin=dict(l=80, r=10, t=10, b=40),
         paper_bgcolor="white",
         plot_bgcolor="white",
-        font=dict(color="#6b7280", size=10, family="Inter"),
+        font=dict(color="#6b7280", size=11, family="Inter"),
         yaxis=dict(autorange="reversed", fixedrange=True),
         xaxis=dict(fixedrange=True)
     )
@@ -518,6 +518,97 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
             )
             st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
             st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Source Analysis Section
+        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">Source Analysis - Walk-ins vs Reservations</div>', unsafe_allow_html=True)
+        
+        source_col1, source_col2 = st.columns(2)
+        
+        # Walk-ins vs Reservations by Day of Week
+        with source_col1:
+            source_dow = df.groupby(["DayOfWeek", "Source"])["Pax"].sum().reset_index()
+            source_dow_pivot = source_dow.pivot(index="DayOfWeek", columns="Source", values="Pax").reindex(dow_order).fillna(0)
+            
+            fig_source_dow = go.Figure()
+            
+            for source in source_dow_pivot.columns:
+                fig_source_dow.add_trace(go.Bar(
+                    x=source_dow_pivot.index,
+                    y=source_dow_pivot[source],
+                    name=source,
+                    marker_color='#3b82f6' if source == 'Reservation' else '#f59e0b',
+                    text=source_dow_pivot[source].astype(int),
+                    textposition="inside",
+                    textfont=dict(size=10, color='white', family='Inter')
+                ))
+            
+            fig_source_dow.update_layout(
+                title=dict(text="Covers by Day of Week", font=dict(size=13, color='#6b7280')),
+                barmode="stack",
+                height=300,
+                margin=dict(l=10, r=10, t=40, b=40),
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color="#6b7280", size=10, family="Inter"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, showline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
+            )
+            
+            st.plotly_chart(fig_source_dow, use_container_width=True, config={'displayModeBar': False})
+        
+        # Walk-ins vs Reservations by Time
+        with source_col2:
+            source_time = df.groupby(["Time_Label", "Source"])["Pax"].sum().reset_index()
+            top_times_source = source_time.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).head(10).index
+            source_time_filtered = source_time[source_time["Time_Label"].isin(top_times_source)]
+            
+            source_time_pivot = source_time_filtered.pivot(index="Time_Label", columns="Source", values="Pax").fillna(0)
+            
+            # Sort by time
+            def time_sort_key(t: str):
+                try:
+                    return datetime.strptime(t.replace(" ", ""), "%I:%M%p")
+                except Exception:
+                    try:
+                        return datetime.strptime(t.replace(" ", ""), "%I%p")
+                    except Exception:
+                        return datetime.min
+            
+            source_time_pivot = source_time_pivot.reindex(sorted(source_time_pivot.index, key=time_sort_key))
+            
+            fig_source_time = go.Figure()
+            
+            for source in source_time_pivot.columns:
+                fig_source_time.add_trace(go.Bar(
+                    x=source_time_pivot.index,
+                    y=source_time_pivot[source],
+                    name=source,
+                    marker_color='#3b82f6' if source == 'Reservation' else '#f59e0b',
+                    text=source_time_pivot[source].astype(int),
+                    textposition="inside",
+                    textfont=dict(size=10, color='white', family='Inter')
+                ))
+            
+            fig_source_time.update_layout(
+                title=dict(text="Covers by Time Slot (Top 10)", font=dict(size=13, color='#6b7280')),
+                barmode="stack",
+                height=300,
+                margin=dict(l=10, r=10, t=40, b=40),
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color="#6b7280", size=10, family="Inter"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, showline=False, tickangle=-45),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
+            )
+            
+            st.plotly_chart(fig_source_time, use_container_width=True, config={'displayModeBar': False})
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
