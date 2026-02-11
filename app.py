@@ -112,7 +112,7 @@ def find_time_col(df: pd.DataFrame) -> str:
     return ""
 
 def clean_month_df(df: pd.DataFrame) -> pd.DataFrame:
-    needed = ["Date", "Name", "Source", "Pax", "Table"]
+    needed = ["Date", "Name", "Source", "Pax"]
     missing = [c for c in needed if c not in df.columns]
     if missing:
         st.error(f"Missing columns: {', '.join(missing)}")
