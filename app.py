@@ -591,6 +591,8 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs[:-1]):
         st.markdown("<br>", unsafe_allow_html=True)
 
         # Source Analysis Section
+        dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">Source Analysis - Walk-ins vs Reservations</div>', unsafe_allow_html=True)
         
