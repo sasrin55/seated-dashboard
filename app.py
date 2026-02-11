@@ -438,41 +438,86 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Just show Walk-ins vs Reservations chart (removing Busiest Day of Week)
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">Walk-ins vs Reservations</div>', unsafe_allow_html=True)
+        left, right = st.columns(2)
 
-        # Get total covers by source, removing any invalid values
-        source_totals = df[df["Source"].notna() & (df["Source"].str.strip().str.len() > 0)].groupby("Source")["Pax"].sum().reset_index()
-        source_totals.columns = ["Source", "Covers"]
-        
-        # Filter out 'nan' strings
-        source_totals = source_totals[source_totals["Source"].str.lower() != 'nan']
+        dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        dow_covers = df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order)
+        dow_bookings = df.groupby("DayOfWeek").size().reindex(dow_order)
 
-        fig_mix = go.Figure(data=[
-            go.Bar(
-                x=source_totals["Source"],
-                y=source_totals["Covers"],
+        with left:
+            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Busiest Day of Week</div>', unsafe_allow_html=True)
+
+            fig_dow = go.Figure()
+            fig_dow.add_trace(go.Bar(
+                x=dow_covers.index,
+                y=dow_bookings.values,
+                name="Bookings",
                 marker_color='#3b82f6',
                 marker_line_width=0,
-                text=source_totals["Covers"].astype(int),
+                text=dow_bookings.fillna(0).astype(int),
                 textposition="outside",
                 textfont=dict(size=11, color='#6b7280', family='Inter')
+            ))
+            fig_dow.add_trace(go.Bar(
+                x=dow_covers.index,
+                y=dow_covers.values,
+                name="Covers",
+                marker_color='#8b5cf6',
+                marker_line_width=0,
+                text=dow_covers.fillna(0).astype(int),
+                textposition="outside",
+                textfont=dict(size=11, color='#6b7280', family='Inter')
+            ))
+            fig_dow.update_layout(
+                barmode="group",
+                height=320,
+                margin=dict(l=10, r=10, t=10, b=40),
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color="#6b7280", size=11, family="Inter"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, showline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
             )
-        ])
-        
-        fig_mix.update_layout(
-            height=320,
-            margin=dict(l=10, r=10, t=10, b=40),
-            paper_bgcolor="white",
-            plot_bgcolor="white",
-            font=dict(color="#6b7280", size=11, family="Inter"),
-            showlegend=False,
-            xaxis=dict(showgrid=False, showline=False),
-            yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False, title="Total Covers"),
-        )
-        st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.plotly_chart(fig_dow, use_container_width=True, config={'displayModeBar': False})
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with right:
+            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Reservations vs Walk-ins</div>', unsafe_allow_html=True)
+
+            mix = df.groupby("Source").agg(
+                Covers=("Pax", "sum"),
+                Bookings=("Source", "size")
+            ).reset_index()
+
+            fig_mix = go.Figure()
+            fig_mix.add_trace(go.Bar(
+                x=mix["Source"],
+                y=mix["Bookings"],
+                name="Bookings",
+                marker_color='#3b82f6'
+            ))
+            fig_mix.add_trace(go.Bar(
+                x=mix["Source"],
+                y=mix["Covers"],
+                name="Covers",
+                marker_color='#8b5cf6'
+            ))
+            fig_mix.update_layout(
+                barmode="group",
+                height=320,
+                margin=dict(l=10, r=10, t=10, b=40),
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color="#6b7280", size=11, family="Inter"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, showline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
+            )
+            st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -482,13 +527,9 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         
         source_col1, source_col2 = st.columns(2)
         
-        # Clean dataframe to remove nan sources
-        df_clean = df[df["Source"].notna() & (df["Source"].str.strip().str.len() > 0)].copy()
-        df_clean = df_clean[df_clean["Source"].str.lower() != 'nan']
-        
         # Walk-ins vs Reservations by Day of Week
         with source_col1:
-            source_dow = df_clean.groupby(["DayOfWeek", "Source"])["Pax"].sum().reset_index()
+            source_dow = df.groupby(["DayOfWeek", "Source"])["Pax"].sum().reset_index()
             source_dow_pivot = source_dow.pivot(index="DayOfWeek", columns="Source", values="Pax").reindex(dow_order).fillna(0)
             
             fig_source_dow = go.Figure()
@@ -521,7 +562,7 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         
         # Walk-ins vs Reservations by Time
         with source_col2:
-            source_time = df_clean.groupby(["Time_Label", "Source"])["Pax"].sum().reset_index()
+            source_time = df.groupby(["Time_Label", "Source"])["Pax"].sum().reset_index()
             top_times_source = source_time.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).head(10).index
             source_time_filtered = source_time[source_time["Time_Label"].isin(top_times_source)]
             
