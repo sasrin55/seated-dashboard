@@ -357,6 +357,12 @@ def get_data_summary(df: pd.DataFrame) -> dict:
     """Generate a summary of the dataset for context"""
     dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     
+    # Safely get unique tables count
+    try:
+        unique_tables = int(df["Table"].nunique()) if "Table" in df.columns else 0
+    except:
+        unique_tables = 0
+    
     summary = {
         "total_covers": int(df["Pax"].sum()),
         "total_bookings": int(len(df)),
@@ -364,8 +370,8 @@ def get_data_summary(df: pd.DataFrame) -> dict:
         "date_range": f"{df['Date'].min().strftime('%Y-%m-%d')} to {df['Date'].max().strftime('%Y-%m-%d')}",
         "sources": df["Source"].value_counts().to_dict(),
         "busiest_day": df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).idxmax(),
-        "busiest_time": df.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).index[0],
-        "unique_tables": df["Table"].nunique(),
+        "busiest_time": df.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).index[0] if len(df) > 0 else "N/A",
+        "unique_tables": unique_tables,
     }
     return summary
 
@@ -396,7 +402,13 @@ def run_analytics_with_ai(df: pd.DataFrame, question: str) -> str:
     ).to_dict()
     
     # Top tables
-    table_stats = df.groupby("Table").size().sort_values(ascending=False).head(10).to_dict()
+    try:
+        if "Table" in df.columns:
+            table_stats = df[df["Table"].notna()].groupby("Table").size().sort_values(ascending=False).head(10).to_dict()
+        else:
+            table_stats = {}
+    except:
+        table_stats = {}
     
     # Create context for OpenAI
     context = f"""
