@@ -3,8 +3,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import calendar
 from datetime import datetime
+import json
+from openai import OpenAI
 
 st.set_page_config(page_title="Seated Dashboard", layout="wide")
+
+# Initialize OpenAI client
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.markdown(
     """
@@ -347,15 +352,124 @@ def top_summary(df: pd.DataFrame):
         "busiest_day_time_bookings_count": peak_bookings_count,
     }
 
+# Chat analytics functions using OpenAI
+def get_data_summary(df: pd.DataFrame) -> dict:
+    """Generate a summary of the dataset for context"""
+    dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    
+    summary = {
+        "total_covers": int(df["Pax"].sum()),
+        "total_bookings": int(len(df)),
+        "avg_party_size": float(df["Pax"].mean()),
+        "date_range": f"{df['Date'].min().strftime('%Y-%m-%d')} to {df['Date'].max().strftime('%Y-%m-%d')}",
+        "sources": df["Source"].value_counts().to_dict(),
+        "busiest_day": df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).idxmax(),
+        "busiest_time": df.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).index[0],
+        "unique_tables": df["Table"].nunique(),
+    }
+    return summary
+
+def run_analytics_with_ai(df: pd.DataFrame, question: str) -> str:
+    """Use OpenAI to answer questions about the data"""
+    
+    # Get data summary for context
+    summary = get_data_summary(df)
+    
+    # Prepare data samples for the AI
+    # Top days by covers
+    dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_stats = df.groupby("DayOfWeek").agg(
+        Covers=("Pax", "sum"),
+        Bookings=("DayOfWeek", "size")
+    ).reindex(dow_order).to_dict()
+    
+    # Top times by covers
+    time_stats = df.groupby("Time_Label").agg(
+        Covers=("Pax", "sum"),
+        Bookings=("Time_Label", "size")
+    ).sort_values("Covers", ascending=False).head(10).to_dict()
+    
+    # Source breakdown
+    source_stats = df.groupby("Source").agg(
+        Covers=("Pax", "sum"),
+        Bookings=("Source", "size")
+    ).to_dict()
+    
+    # Top tables
+    table_stats = df.groupby("Table").size().sort_values(ascending=False).head(10).to_dict()
+    
+    # Create context for OpenAI
+    context = f"""
+You are analyzing restaurant reservation data. Answer the user's question using ONLY the data provided below.
+
+Dataset Summary:
+- Total Covers: {summary['total_covers']:,}
+- Total Bookings: {summary['total_bookings']:,}
+- Average Party Size: {summary['avg_party_size']:.2f}
+- Date Range: {summary['date_range']}
+- Busiest Day: {summary['busiest_day']}
+- Busiest Time: {summary['busiest_time']}
+
+Day of Week Statistics (Covers):
+{json.dumps(day_stats['Covers'], indent=2)}
+
+Day of Week Statistics (Bookings):
+{json.dumps(day_stats['Bookings'], indent=2)}
+
+Top Time Slots by Covers:
+{json.dumps(time_stats['Covers'], indent=2)}
+
+Source Breakdown (Covers):
+{json.dumps(source_stats['Covers'], indent=2)}
+
+Source Breakdown (Bookings):
+{json.dumps(source_stats['Bookings'], indent=2)}
+
+Top Tables by Usage:
+{json.dumps(table_stats, indent=2)}
+
+Instructions:
+- Answer clearly and concisely
+- Use specific numbers from the data
+- Format large numbers with commas (e.g., 1,234)
+- Use markdown formatting for emphasis
+- If the data doesn't contain the answer, say so
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": context},
+                {"role": "user", "content": question}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        return f"Sorry, I encountered an error: {str(e)}\n\nPlease try rephrasing your question."
+
+@st.cache_data
+def load_all_months(month_files: dict) -> pd.DataFrame:
+    """Load and combine all monthly CSV files"""
+    frames = []
+    for file_path in month_files.values():
+        frames.append(clean_month_df(load_csv(file_path)))
+    return pd.concat(frames, ignore_index=True)
+
 # Main dashboard
 st.markdown('<div class="main-title">Seated Performance Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Monthly views for covers, bookings, calendar demand, and busiest patterns</div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-month_tabs = st.tabs(list(MONTH_FILES.keys()))
+# Add Chat to the tabs
+month_tabs = st.tabs(list(MONTH_FILES.keys()) + ["Chat"])
 
-for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
+for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs[:-1]):
     with tab:
         file_path = MONTH_FILES[tab_name]
         raw = load_csv(file_path)
@@ -438,86 +552,41 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
-        left, right = st.columns(2)
+        # Just show Walk-ins vs Reservations chart (removing Busiest Day of Week)
+        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">Walk-ins vs Reservations</div>', unsafe_allow_html=True)
 
-        dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        dow_covers = df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order)
-        dow_bookings = df.groupby("DayOfWeek").size().reindex(dow_order)
+        # Get total covers by source, removing any invalid values
+        source_totals = df[df["Source"].notna() & (df["Source"].str.strip().str.len() > 0)].groupby("Source")["Pax"].sum().reset_index()
+        source_totals.columns = ["Source", "Covers"]
+        
+        # Filter out 'nan' strings
+        source_totals = source_totals[source_totals["Source"].str.lower() != 'nan']
 
-        with left:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            st.markdown('<div class="card-title">Busiest Day of Week</div>', unsafe_allow_html=True)
-
-            fig_dow = go.Figure()
-            fig_dow.add_trace(go.Bar(
-                x=dow_covers.index,
-                y=dow_bookings.values,
-                name="Bookings",
+        fig_mix = go.Figure(data=[
+            go.Bar(
+                x=source_totals["Source"],
+                y=source_totals["Covers"],
                 marker_color='#3b82f6',
                 marker_line_width=0,
-                text=dow_bookings.fillna(0).astype(int),
+                text=source_totals["Covers"].astype(int),
                 textposition="outside",
                 textfont=dict(size=11, color='#6b7280', family='Inter')
-            ))
-            fig_dow.add_trace(go.Bar(
-                x=dow_covers.index,
-                y=dow_covers.values,
-                name="Covers",
-                marker_color='#8b5cf6',
-                marker_line_width=0,
-                text=dow_covers.fillna(0).astype(int),
-                textposition="outside",
-                textfont=dict(size=11, color='#6b7280', family='Inter')
-            ))
-            fig_dow.update_layout(
-                barmode="group",
-                height=320,
-                margin=dict(l=10, r=10, t=10, b=40),
-                paper_bgcolor="white",
-                plot_bgcolor="white",
-                font=dict(color="#6b7280", size=11, family="Inter"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(showgrid=False, showline=False),
-                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
             )
-            st.plotly_chart(fig_dow, use_container_width=True, config={'displayModeBar': False})
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with right:
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            st.markdown('<div class="card-title">Reservations vs Walk-ins</div>', unsafe_allow_html=True)
-
-            mix = df.groupby("Source").agg(
-                Covers=("Pax", "sum"),
-                Bookings=("Source", "size")
-            ).reset_index()
-
-            fig_mix = go.Figure()
-            fig_mix.add_trace(go.Bar(
-                x=mix["Source"],
-                y=mix["Bookings"],
-                name="Bookings",
-                marker_color='#3b82f6'
-            ))
-            fig_mix.add_trace(go.Bar(
-                x=mix["Source"],
-                y=mix["Covers"],
-                name="Covers",
-                marker_color='#8b5cf6'
-            ))
-            fig_mix.update_layout(
-                barmode="group",
-                height=320,
-                margin=dict(l=10, r=10, t=10, b=40),
-                paper_bgcolor="white",
-                plot_bgcolor="white",
-                font=dict(color="#6b7280", size=11, family="Inter"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(showgrid=False, showline=False),
-                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
-            )
-            st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
-            st.markdown('</div>', unsafe_allow_html=True)
+        ])
+        
+        fig_mix.update_layout(
+            height=320,
+            margin=dict(l=10, r=10, t=10, b=40),
+            paper_bgcolor="white",
+            plot_bgcolor="white",
+            font=dict(color="#6b7280", size=11, family="Inter"),
+            showlegend=False,
+            xaxis=dict(showgrid=False, showline=False),
+            yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False, title="Total Covers"),
+        )
+        st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
+        st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -527,9 +596,13 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         
         source_col1, source_col2 = st.columns(2)
         
+        # Clean dataframe to remove nan sources
+        df_clean = df[df["Source"].notna() & (df["Source"].str.strip().str.len() > 0)].copy()
+        df_clean = df_clean[df_clean["Source"].str.lower() != 'nan']
+        
         # Walk-ins vs Reservations by Day of Week
         with source_col1:
-            source_dow = df.groupby(["DayOfWeek", "Source"])["Pax"].sum().reset_index()
+            source_dow = df_clean.groupby(["DayOfWeek", "Source"])["Pax"].sum().reset_index()
             source_dow_pivot = source_dow.pivot(index="DayOfWeek", columns="Source", values="Pax").reindex(dow_order).fillna(0)
             
             fig_source_dow = go.Figure()
@@ -562,7 +635,7 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         
         # Walk-ins vs Reservations by Time
         with source_col2:
-            source_time = df.groupby(["Time_Label", "Source"])["Pax"].sum().reset_index()
+            source_time = df_clean.groupby(["Time_Label", "Source"])["Pax"].sum().reset_index()
             top_times_source = source_time.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).head(10).index
             source_time_filtered = source_time[source_time["Time_Label"].isin(top_times_source)]
             
@@ -622,3 +695,59 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
             st.plotly_chart(weekly_view_fig(df, "Bookings"), use_container_width=True, config={'displayModeBar': False})
 
         st.markdown("</div>", unsafe_allow_html=True)
+
+# Chat Tab
+with month_tabs[-1]:
+    st.markdown('<div class="main-title">Chat with Your Data</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">Ask questions and get answers from your reservation data</div>', unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Load all months data
+    df_all = load_all_months(MONTH_FILES)
+    
+    # Month selector
+    months = sorted(df_all["Date"].dt.strftime("%B %Y").unique().tolist())
+    month_scope = st.selectbox("Data scope", ["All months"] + months, key="chat_month_scope")
+    
+    if month_scope != "All months":
+        working_df = df_all[df_all["Date"].dt.strftime("%B %Y") == month_scope].copy()
+        st.caption(f"Analyzing data from: {month_scope}")
+    else:
+        working_df = df_all.copy()
+        st.caption(f"Analyzing data from: All {len(months)} months")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Example questions
+    st.markdown("**Example questions:**")
+    st.caption("• What's the busiest day?  • What's the busiest time?  • Walk-ins vs reservations?  • Average party size?  • Most popular tables?")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Chat input
+    if prompt := st.chat_input("Ask a question about your reservation data..."):
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Generate response using OpenAI
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing data with AI..."):
+                response = run_analytics_with_ai(working_df, prompt)
+                st.markdown(response)
+        
+        # Add assistant response to chat history
+        st.session_state.messages.append({"role": "assistant", "content": response})
