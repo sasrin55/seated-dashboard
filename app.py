@@ -410,6 +410,14 @@ def run_analytics_with_ai(df: pd.DataFrame, question: str) -> str:
     except:
         table_stats = {}
     
+    # Daily breakdown - allows date-specific queries
+    daily_covers = df.groupby("DateOnly")["Pax"].sum().to_dict()
+    daily_bookings = df.groupby("DateOnly").size().to_dict()
+    
+    # Format daily data as readable strings (e.g., "2025-12-05: 324 covers")
+    daily_covers_str = "\n".join([f"  {str(date)}: {int(covers)} covers" for date, covers in sorted(daily_covers.items())])
+    daily_bookings_str = "\n".join([f"  {str(date)}: {int(bookings)} bookings" for date, bookings in sorted(daily_bookings.items())])
+    
     # Create context for OpenAI
     context = f"""
 You are analyzing restaurant reservation data. Answer the user's question using ONLY the data provided below.
@@ -440,11 +448,19 @@ Source Breakdown (Bookings):
 Top Tables by Usage:
 {json.dumps(table_stats, indent=2)}
 
+Daily Breakdown (all dates):
+{daily_covers_str}
+
+Daily Bookings (all dates):
+{daily_bookings_str}
+
 Instructions:
 - Answer clearly and concisely
 - Use specific numbers from the data
 - Format large numbers with commas (e.g., 1,234)
 - Use markdown formatting for emphasis
+- When asked about a specific date (e.g., "December 5th" or "the 5th"), look it up in the Daily Breakdown section above
+- The dates are in YYYY-MM-DD format (e.g., 2025-12-05 is December 5th, 2025)
 - If the data doesn't contain the answer, say so
 """
     
@@ -736,6 +752,15 @@ with month_tabs[-1]:
     # Example questions
     st.markdown("**Example questions:**")
     st.caption("• What's the busiest day?  • What's the busiest time?  • Walk-ins vs reservations?  • Average party size?  • Most popular tables?")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Clear chat button
+    col1, col2 = st.columns([6, 1])
+    with col2:
+        if st.button("Clear Chat", type="secondary"):
+            st.session_state.messages = []
+            st.rerun()
     
     st.markdown("<br>", unsafe_allow_html=True)
     
