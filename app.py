@@ -132,8 +132,6 @@ def clean_month_df(df: pd.DataFrame) -> pd.DataFrame:
 
     t = df[time_col].astype(str).str.strip()
 
-    # Keep original times but normalize to a readable label
-    # This avoids date-based parsing issues that caused AM/PM flipping previously.
     def normalize_time_label(x: str) -> str:
         if not x or x.lower() in ["nan", "none"]:
             return ""
@@ -203,7 +201,7 @@ def calendar_heatmap(cal_df: pd.DataFrame, value_col: str, colorscale) -> go.Fig
         go.Heatmap(
             z=pivot.values,
             x=weekday_labels,
-            y=[f"Week {i+1}" for i in pivot.index],
+            y=[f"W{i+1}" for i in pivot.index],
             text=text.values,
             texttemplate="%{text}",
             hovertext=hover.values,
@@ -234,13 +232,13 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
     else:
         agg = df.groupby(["DayOfWeek", "Time_Label"]).size().reset_index(name="Value")
 
-    pivot = agg.pivot(index="Time_Label", columns="DayOfWeek", values="Value").reindex(columns=dow_order)
+    pivot = agg.pivot(index="Time_Label", columns="DayOfWeek", values="Value").reindex(columns=dow_order).fillna(0)
 
     # Focus on top 14 time slots for readability
     top_times = agg.groupby("Time_Label")["Value"].sum().sort_values(ascending=False).head(14).index
     pivot = pivot.loc[pivot.index.isin(top_times)]
 
-    # Sort time labels in a human-friendly way if possible
+    # Sort time labels
     def time_sort_key(t: str):
         try:
             return datetime.strptime(t.replace(" ", ""), "%I:%M%p")
@@ -252,14 +250,21 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
 
     pivot = pivot.reindex(sorted(pivot.index, key=time_sort_key))
 
+    # Clean text values
+    z_values = pivot.values
+    text_values = [[f'{int(val)}' if val > 0 else '' for val in row] for row in z_values]
+
     fig = go.Figure(
         data=go.Heatmap(
-            z=pivot.values,
+            z=z_values,
             x=dow_labels,
-            y=pivot.index,
+            y=pivot.index.tolist(),
             colorscale=[[0, "#eff6ff"], [0.5, "#60a5fa"], [1, "#1e40af"]] if metric == "Covers"
                       else [[0, "#f0fdf4"], [0.5, "#34d399"], [1, "#166534"]],
             showscale=False,
+            text=text_values,
+            texttemplate='%{text}',
+            textfont=dict(size=10, family='Inter', color='#1a1d29'),
             hovertemplate="%{y}<br>%{x}<br>Value: %{z}<extra></extra>",
         )
     )
@@ -270,7 +275,8 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
         paper_bgcolor="white",
         plot_bgcolor="white",
         font=dict(color="#6b7280", size=10, family="Inter"),
-        yaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed", fixedrange=True),
+        xaxis=dict(fixedrange=True)
     )
     return fig
 
@@ -295,8 +301,11 @@ def top_summary(df: pd.DataFrame):
         "busiest_day_time_bookings": f"{day_time_bookings.index[0][0]} at {day_time_bookings.index[0][1]}" if len(day_time_bookings) else "",
     }
 
+# Main dashboard
 st.markdown('<div class="main-title">Seated Performance Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Monthly views for covers, bookings, calendar demand, and busiest patterns</div>', unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
 
 month_tabs = st.tabs(list(MONTH_FILES.keys()))
 
@@ -315,8 +324,7 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
 
         summary = top_summary(df)
 
-        st.markdown(f'<div class="main-title">{tab_name}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-title">Totals and busiest moments</div>', unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -334,7 +342,7 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         with s1:
             st.metric("Busiest Time (Covers)", summary["busiest_time_covers"])
         with s2:
-            st.metric("Busiest Day and Time (Covers)", summary["busiest_day_time_covers"])
+            st.metric("Busiest Day & Time", summary["busiest_day_time_covers"])
         with s3:
             st.metric("Busiest Day (Bookings)", summary["busiest_day_bookings"])
         with s4:
@@ -351,12 +359,14 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         with t1:
             st.plotly_chart(
                 calendar_heatmap(cal_df, "Covers", [[0, "#eff6ff"], [0.5, "#3b82f6"], [1, "#1e3a8a"]]),
-                use_container_width=True
+                use_container_width=True,
+                config={'displayModeBar': False}
             )
         with t2:
             st.plotly_chart(
                 calendar_heatmap(cal_df, "Bookings", [[0, "#f0fdf4"], [0.5, "#22c55e"], [1, "#166534"]]),
-                use_container_width=True
+                use_container_width=True,
+                config={'displayModeBar': False}
             )
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -376,8 +386,11 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
             fig_dow.add_trace(go.Bar(
                 x=dow_covers.index,
                 y=dow_covers.values,
+                marker_color='#3b82f6',
+                marker_line_width=0,
                 text=dow_covers.fillna(0).astype(int),
                 textposition="outside",
+                textfont=dict(size=11, color='#6b7280', family='Inter')
             ))
             fig_dow.update_layout(
                 height=320,
@@ -386,10 +399,10 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
                 plot_bgcolor="white",
                 font=dict(color="#6b7280", size=11, family="Inter"),
                 showlegend=False,
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", zeroline=False),
+                xaxis=dict(showgrid=False, showline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
             )
-            st.plotly_chart(fig_dow, use_container_width=True)
+            st.plotly_chart(fig_dow, use_container_width=True, config={'displayModeBar': False})
             st.markdown('</div>', unsafe_allow_html=True)
 
         with right:
@@ -405,12 +418,14 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
             fig_mix.add_trace(go.Bar(
                 x=mix["Source"],
                 y=mix["Bookings"],
-                name="Bookings"
+                name="Bookings",
+                marker_color='#3b82f6'
             ))
             fig_mix.add_trace(go.Bar(
                 x=mix["Source"],
                 y=mix["Covers"],
-                name="Covers"
+                name="Covers",
+                marker_color='#8b5cf6'
             ))
             fig_mix.update_layout(
                 barmode="group",
@@ -420,10 +435,10 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
                 plot_bgcolor="white",
                 font=dict(color="#6b7280", size=11, family="Inter"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", zeroline=False),
+                xaxis=dict(showgrid=False, showline=False),
+                yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
             )
-            st.plotly_chart(fig_mix, use_container_width=True)
+            st.plotly_chart(fig_mix, use_container_width=True, config={'displayModeBar': False})
             st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -433,8 +448,8 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
 
         w1, w2 = st.tabs(["Covers", "Bookings"])
         with w1:
-            st.plotly_chart(weekly_view_fig(df, "Covers"), use_container_width=True)
+            st.plotly_chart(weekly_view_fig(df, "Covers"), use_container_width=True, config={'displayModeBar': False})
         with w2:
-            st.plotly_chart(weekly_view_fig(df, "Bookings"), use_container_width=True)
+            st.plotly_chart(weekly_view_fig(df, "Bookings"), use_container_width=True, config={'displayModeBar': False})
 
         st.markdown("</div>", unsafe_allow_html=True)
