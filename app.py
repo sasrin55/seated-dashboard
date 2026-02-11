@@ -37,19 +37,28 @@ st.markdown(
         border-radius: 12px;
         padding: 1.25rem;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        min-height: 100px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
       }
       div[data-testid="stMetricValue"] {
-        font-size: 2.2rem;
+        font-size: 1.8rem;
         font-weight: 800;
         color: #111827;
         letter-spacing: -0.03em;
+        line-height: 1.2;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
       }
       div[data-testid="stMetricLabel"] {
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         font-weight: 700;
         color: #6b7280;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.05em;
+        line-height: 1.3;
+        margin-bottom: 0.5rem;
       }
 
       .chart-container {
@@ -283,22 +292,59 @@ def weekly_view_fig(df: pd.DataFrame, metric: str) -> go.Figure:
 def top_summary(df: pd.DataFrame):
     dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-    busiest_day_covers = df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order).idxmax()
-    busiest_day_bookings = df.groupby("DayOfWeek").size().reindex(dow_order).idxmax()
+    # Busiest day by covers
+    day_covers = df.groupby("DayOfWeek")["Pax"].sum().reindex(dow_order)
+    busiest_day_covers = day_covers.idxmax()
+    busiest_day_covers_count = int(day_covers.max())
+    
+    # Busiest day by bookings
+    day_bookings = df.groupby("DayOfWeek").size().reindex(dow_order)
+    busiest_day_bookings = day_bookings.idxmax()
+    busiest_day_bookings_count = int(day_bookings.max())
 
-    busiest_time_covers = df.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False).head(1)
-    busiest_time_bookings = df.groupby("Time_Label").size().sort_values(ascending=False).head(1)
+    # Busiest time by covers
+    time_covers = df.groupby("Time_Label")["Pax"].sum().sort_values(ascending=False)
+    busiest_time_covers = time_covers.index[0] if len(time_covers) else ""
+    busiest_time_covers_count = int(time_covers.iloc[0]) if len(time_covers) else 0
+    
+    # Busiest time by bookings
+    time_bookings = df.groupby("Time_Label").size().sort_values(ascending=False)
+    busiest_time_bookings = time_bookings.index[0] if len(time_bookings) else ""
+    busiest_time_bookings_count = int(time_bookings.iloc[0]) if len(time_bookings) else 0
 
-    day_time_covers = df.groupby(["DayOfWeek", "Time_Label"])["Pax"].sum().sort_values(ascending=False).head(1)
-    day_time_bookings = df.groupby(["DayOfWeek", "Time_Label"]).size().sort_values(ascending=False).head(1)
+    # Busiest day+time by covers
+    day_time_covers = df.groupby(["DayOfWeek", "Time_Label"])["Pax"].sum().sort_values(ascending=False)
+    if len(day_time_covers) > 0:
+        peak_dow, peak_time = day_time_covers.index[0]
+        peak_covers_count = int(day_time_covers.iloc[0])
+        busiest_day_time_covers = f"{peak_dow} @ {peak_time}"
+    else:
+        busiest_day_time_covers = ""
+        peak_covers_count = 0
+    
+    # Busiest day+time by bookings
+    day_time_bookings = df.groupby(["DayOfWeek", "Time_Label"]).size().sort_values(ascending=False)
+    if len(day_time_bookings) > 0:
+        peak_dow_b, peak_time_b = day_time_bookings.index[0]
+        peak_bookings_count = int(day_time_bookings.iloc[0])
+        busiest_day_time_bookings = f"{peak_dow_b} @ {peak_time_b}"
+    else:
+        busiest_day_time_bookings = ""
+        peak_bookings_count = 0
 
     return {
         "busiest_day_covers": busiest_day_covers,
+        "busiest_day_covers_count": busiest_day_covers_count,
         "busiest_day_bookings": busiest_day_bookings,
-        "busiest_time_covers": busiest_time_covers.index[0] if len(busiest_time_covers) else "",
-        "busiest_time_bookings": busiest_time_bookings.index[0] if len(busiest_time_bookings) else "",
-        "busiest_day_time_covers": f"{day_time_covers.index[0][0]} at {day_time_covers.index[0][1]}" if len(day_time_covers) else "",
-        "busiest_day_time_bookings": f"{day_time_bookings.index[0][0]} at {day_time_bookings.index[0][1]}" if len(day_time_bookings) else "",
+        "busiest_day_bookings_count": busiest_day_bookings_count,
+        "busiest_time_covers": busiest_time_covers,
+        "busiest_time_covers_count": busiest_time_covers_count,
+        "busiest_time_bookings": busiest_time_bookings,
+        "busiest_time_bookings_count": busiest_time_bookings_count,
+        "busiest_day_time_covers": busiest_day_time_covers,
+        "busiest_day_time_covers_count": peak_covers_count,
+        "busiest_day_time_bookings": busiest_day_time_bookings,
+        "busiest_day_time_bookings_count": peak_bookings_count,
     }
 
 # Main dashboard
@@ -334,19 +380,39 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
         with c3:
             st.metric("Average Party Size", f"{avg_party:.2f}")
         with c4:
-            st.metric("Busiest Day (Covers)", summary["busiest_day_covers"])
+            st.metric(
+                "Busiest Day (Covers)", 
+                summary["busiest_day_covers"],
+                delta=f"{summary['busiest_day_covers_count']:,} covers"
+            )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         s1, s2, s3, s4 = st.columns(4)
         with s1:
-            st.metric("Busiest Time (Covers)", summary["busiest_time_covers"])
+            st.metric(
+                "Busiest Time (Covers)", 
+                summary["busiest_time_covers"],
+                delta=f"{summary['busiest_time_covers_count']:,} covers"
+            )
         with s2:
-            st.metric("Busiest Day & Time", summary["busiest_day_time_covers"])
+            st.metric(
+                "Peak Slot", 
+                summary["busiest_day_time_covers"],
+                delta=f"{summary['busiest_day_time_covers_count']:,} covers"
+            )
         with s3:
-            st.metric("Busiest Day (Bookings)", summary["busiest_day_bookings"])
+            st.metric(
+                "Busiest Day (Bookings)", 
+                summary["busiest_day_bookings"],
+                delta=f"{summary['busiest_day_bookings_count']:,} bookings"
+            )
         with s4:
-            st.metric("Busiest Time (Bookings)", summary["busiest_time_bookings"])
+            st.metric(
+                "Busiest Time (Bookings)", 
+                summary["busiest_time_bookings"],
+                delta=f"{summary['busiest_time_bookings_count']:,} bookings"
+            )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -385,20 +451,32 @@ for tab_name, tab in zip(MONTH_FILES.keys(), month_tabs):
             fig_dow = go.Figure()
             fig_dow.add_trace(go.Bar(
                 x=dow_covers.index,
-                y=dow_covers.values,
+                y=dow_bookings.values,
+                name="Bookings",
                 marker_color='#3b82f6',
+                marker_line_width=0,
+                text=dow_bookings.fillna(0).astype(int),
+                textposition="outside",
+                textfont=dict(size=11, color='#6b7280', family='Inter')
+            ))
+            fig_dow.add_trace(go.Bar(
+                x=dow_covers.index,
+                y=dow_covers.values,
+                name="Covers",
+                marker_color='#8b5cf6',
                 marker_line_width=0,
                 text=dow_covers.fillna(0).astype(int),
                 textposition="outside",
                 textfont=dict(size=11, color='#6b7280', family='Inter')
             ))
             fig_dow.update_layout(
+                barmode="group",
                 height=320,
                 margin=dict(l=10, r=10, t=10, b=40),
                 paper_bgcolor="white",
                 plot_bgcolor="white",
                 font=dict(color="#6b7280", size=11, family="Inter"),
-                showlegend=False,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 xaxis=dict(showgrid=False, showline=False),
                 yaxis=dict(showgrid=True, gridcolor="#f3f4f6", showline=False, zeroline=False),
             )
